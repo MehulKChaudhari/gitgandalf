@@ -1,184 +1,161 @@
 # Git Gandalf 🧙‍♂️
 
-Git Gandalf is a **local, pre-commit code reviewer** that runs entirely on your machine and blocks risky commits before they land.
+A **local, pre-commit AI code reviewer** that runs entirely on your machine. It reads your staged diff, sends it to a local LLM, and blocks risky commits before they land.
 
-It is intentionally small, boring, and strict.
-
-No SaaS.  
-No cloud calls.  
-No frameworks.  
-No magic.
+No SaaS. No cloud calls. No frameworks. No magic.
 
 Just Git → Node → Local LLM → Decision.
 
 ---
 
-## What This Is
+## How It Works
 
-Git Gandalf is a **Unix-style CLI tool** designed to be used from a Git `pre-commit` hook.
-
-At commit time, it:
-1. Reads the staged diff from STDIN
-2. Extracts basic metadata
-3. Asks a local LLM to judge the change
-4. Applies a hardcoded policy
-5. Allows or blocks the commit via exit code
-
-It does **not**:
-- Scan the whole repo
-- Modify files
-- Phone home
-- Persist state
-- Depend on Git internals
-
-One run. One diff. One decision.
-
----
-
-## Design Principles
-
-- **Clear execution boundary** – one entry point, one exit code  
-- **Fail closed** – ambiguous states block the commit  
-- **Separation of concerns** – each stage does one thing  
-- **Local-first** – everything runs on your machine  
-- **Unix composability** – STDIN / STDOUT only  
-
----
-
-## High-Level Flow
-
-```mermaid
-flowchart TD
-    A[git commit] --> B[pre-commit hook]
-    B --> C[git diff --cached]
-    C -->|STDIN| D[gitgandalf.js]
-
-    D --> E[Diff Intake + Guardrails]
-    E --> F[Metadata Extraction]
-    F --> G[Local LLM Judge]
-    G --> H[Judgment Normalization]
-    H --> I[Policy Engine]
-
-    I -->|ALLOW / WARN| J[exit 0]
-    I -->|BLOCK| K[exit 1]
+```
+git commit
+    ↓
+pre-commit hook
+    ↓
+git diff --cached  →  STDIN  →  gitgandalf.js
+    ↓
+1. Read diff (intake.js)
+2. Extract metadata (metadata.js)
+3. Build prompt + send to local LLM (prompt.js → llm.js)
+4. Validate LLM response (normalize.js)
+5. Apply policy (decide.js)
+6. Render result (terminal.js)
+7. Exit 0 (allow) or Exit 1 (block)
 ```
 
 ---
 
-## Project Structure (P0)
+## Requirements
 
-```
-gitgandalf/
-├─ gitgandalf.js
-├─ diff/
-│  ├─ intake.js
-│  └─ metadata.js
-├─ judge/
-│  ├─ prompt.v1.txt
-│  └─ normalize.js
-├─ policy/
-│  └─ decide.js
-├─ render/
-│  └─ terminal.js
-└─ README.md
-```
+- **Node.js** v18 or later (uses built-in `fetch`)
+- **LM Studio** with a running local server
+- A model loaded in LM Studio (default: `qwen/qwen3-4b-2507`)
 
 ---
 
-## Using Git Gandalf Locally
+## Setup
 
-### 1. Clone Git Gandalf
-
-Clone this repository anywhere on your machine:
+### 1. Clone & install
 
 ```bash
-git clone <git-gandalf-repo-url>
-cd gitgandalf
-```
-
-Install dependencies (if any):
-
-```bash
+git clone <repo-url> ~/gitgandalf
+cd ~/gitgandalf
 npm install
 ```
 
----
-
-### 2. Run a Local LLM
-
-Git Gandalf expects a **local, OpenAI-compatible LLM server**.
-
-Example using LM Studio:
+### 2. Start LM Studio
 
 1. Open LM Studio
-2. Download a model (e.g. Qwen, Llama)
-3. Start the local server
-4. Ensure the API is available at:
+2. Download a model (e.g. `qwen/qwen3-4b-2507`)
+3. Click **Start Server**
+4. Confirm the API is running at `http://127.0.0.1:1234`
 
-```
-http://127.0.0.1:1234
-```
+Git Gandalf does not manage models. It only talks to a running server.
 
-Git Gandalf does not manage models.  
-It only sends prompts to a running local server.
+### 3. Wire to a repo
 
----
+In the repo you want to protect, create the hook:
 
-### 3. Wire Git Gandalf to a Repo
-
-In the repository you want to protect, create a Git pre-commit hook:
-
-```
-.git/hooks/pre-commit
-```
-
-Add:
-
-```sh
+```bash
+cat > .git/hooks/pre-commit << 'EOF'
 #!/bin/sh
 
 DIFF=$(git diff --cached)
 
 if [ -z "$DIFF" ]; then
-  exit 0
+    exit 0
 fi
 
-echo "$DIFF" | node /absolute/path/to/gitgandalf.js
+echo "$DIFF" | node ~/gitgandalf/gitgandalf.js
 exit $?
-```
+EOF
 
-Make it executable:
-
-```bash
 chmod +x .git/hooks/pre-commit
 ```
 
----
+Replace `~/gitgandalf` with the actual path to this project.
 
-### 4. Usage
+### 4. Use it
 
-From now on:
+From now on, every `git commit` runs Git Gandalf automatically.
 
-- Normal commits run Git Gandalf automatically
-- High-risk changes can block commits
-- You can bypass at any time with:
+- **LOW risk** → ✅ ALLOW → commit proceeds
+- **MEDIUM risk** → ⚠️ WARN → commit proceeds with warnings shown
+- **HIGH risk** → ❌ BLOCK → commit is rejected
+
+To bypass:
 
 ```bash
 git commit --no-verify
 ```
 
-Git Gandalf never modifies your code or your repository.
+---
 
+## Running Tests
 
-## Scope (P0)
+```bash
+npm test
+```
 
-- One hardcoded policy
-- No config
-- No telemetry
-- No background processes
-
-This is deliberate.
+Uses Node's built-in test runner — no test frameworks needed.
 
 ---
 
-Git Gandalf is a guardrail, not a replacement for code review.
+## Project Structure
+
+```
+gitgandalf/
+├── gitgandalf.js          # Orchestrator — the full pipeline
+├── diff/
+│   ├── intake.js          # Reads stdin, size cap, CRLF normalization
+│   └── metadata.js        # Diff → { files, lines_added, lines_removed }
+├── judge/
+│   ├── llm.js             # HTTP client for LM Studio API
+│   ├── prompt.js          # Builds the messages array
+│   ├── prompt.v1.txt      # System prompt (versioned)
+│   └── normalize.js       # Validates LLM JSON response
+├── policy/
+│   └── decide.js          # LOW→ALLOW, MEDIUM→WARN, HIGH→BLOCK
+├── render/
+│   └── terminal.js        # Colored terminal output
+├── tests/                 # All unit tests
+├── package.json
+└── README.md
+```
+
+---
+
+## Failure Behavior
+
+Git Gandalf fails loudly, never silently.
+
+| Scenario | Behavior | Exit Code |
+|---|---|---|
+| LLM not running | ⚠️ WARN — commit allowed, warning shown | 0 |
+| LLM times out (60s) | ⚠️ WARN — commit allowed, warning shown | 0 |
+| LLM returns bad JSON | ❌ BLOCK — commit rejected | 1 |
+| Internal error | ❌ BLOCK — commit rejected | 1 |
+| Empty diff | Skip — no review | 0 |
+| Diff too large (>500KB) | ❌ BLOCK — commit rejected | 1 |
+
+---
+
+## Limitations
+
+- One hardcoded policy (no config files)
+- No per-repo or per-file rules
+- No retry logic
+- No caching of previous reviews
+- Single model, single endpoint
+- Prompt changes are breaking changes
+
+This is deliberate. Git Gandalf is a guardrail, not a replacement for code review.
+
+---
+
+## License
+
+ISC
